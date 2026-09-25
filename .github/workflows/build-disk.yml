@@ -71,8 +71,51 @@ jobs:
       - name: Maximize build space
         if: inputs.platform != 'arm64'
         uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
-        with:
-          remove-codeql: true
+
+      - name: Keep bwrap children in the parent AppArmor profile (Ubuntu 26.04)
+        # Hintergrund:
+        # Ubuntu 26.04 bringt das AppArmor-Profil "bwrap-userns-restrict" mit.
+        # Es greift über den Pfad /usr/bin/bwrap, auch innerhalb eines
+        # privilegierten Podman-Containers, und verschiebt alles, was bwrap
+        # startet, in das Profil "unpriv_bwrap", das keine Rechte hat.
+        # osbuild (im bootc-image-builder) führt jeden Arbeitsschritt unter
+        # bwrap aus. Folge: root verliert CAP_CHOWN und das Recht einzuhängen.
+        # Fehlerbild in diesem Repo (Build disk images #2, 25.09.2026):
+        #   fchownat() ... Operation not permitted
+        #   mount: /run/osbuild/containers/storage: permission denied (qcow2)
+        #   mount: /run/osbuild/tree/dev: permission denied (anaconda-iso)
+        #
+        # Lösung:
+        # Dieselbe Ausnahme, die das bootc-Projekt auf seinen eigenen Runnern
+        # verwendet (bootc-dev/actions PR #55, Datei
+        # bootc-ubuntu-setup/action.yml). Über die vorgesehene lokale
+        # Ergänzungsdatei des Profils bleiben die von bwrap gestarteten
+        # Programme im normalen Profil "bwrap (enforce)".
+        # AppArmor bleibt eingeschaltet, beide Profile bleiben geladen.
+        # Betrifft nur diesen Runner, der nach dem Job verworfen wird.
+        #
+        # Ist das Profil nicht vorhanden oder nicht aktiv (z. B. ubuntu-24.04),
+        # tut dieser Schritt nichts.
+        run: |
+          # Nur eingreifen, wenn das Profil existiert UND aktiv durchgesetzt wird
+          if sudo test -r /etc/apparmor.d/bwrap-userns-restrict &&
+             sudo test -r /sys/kernel/security/apparmor/profiles &&
+             sudo grep -qx 'bwrap (enforce)' /sys/kernel/security/apparmor/profiles; then
+            # Zwei Regeln mit Vorrang in die lokale Ergänzungsdatei schreiben:
+            #   1. Dateizugriffe (lesen, schreiben, sperren, verlinken, mappen) erlauben
+            #   2. Gestartete Programme erben das Profil (ix), statt in
+            #      unpriv_bwrap zu wechseln
+            printf '%s\n' 'priority=100 allow file rwlkm /**,' 'priority=100 allow ix /**,' \
+              | sudo tee /etc/apparmor.d/local/bwrap-userns-restrict >/dev/null
+            # Profil erst nur prüfen (-Q: kein Laden), damit ein Syntaxfehler
+            # hier abbricht und nicht halb geladen wird
+            sudo apparmor_parser -Q /etc/apparmor.d/bwrap-userns-restrict
+            # Profil mit der Ergänzung neu laden (-r: ersetzen)
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+            echo "bwrap AppArmor override installed"
+          else
+            echo "bwrap-userns-restrict not enforced on this runner, nothing to do"
+          fi
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
