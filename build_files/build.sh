@@ -1,27 +1,73 @@
 #!/bin/bash
+# =============================================================================
+# build.sh – Anpassungen für das Image bluefin-mullvad.
+# Läuft während des Container-Builds auf GitHub, NICHT auf dem Rechner.
+# =============================================================================
+set -ouex pipefail   # bei Fehlern sofort abbrechen, jeden Befehl ins Build-Log schreiben
 
-set -ouex pipefail
-
-# Copy the contents of system_files/ of the git repo to /
+# --- 0. Eigene Dateien aus system_files/ ins Image kopieren --------------------
+# Aus der Vorlage übernommen: Alles im Ordner system_files/ des Repositorys
+# landet an derselben Stelle im Image (z. B. system_files/etc/... → /etc/...).
 cp -avf "/ctx/system_files"/. /
 
-### Install packages
+# =============================================================================
+# Mullvad VPN (Dienst + grafische App + Killswitch)
+# =============================================================================
 
-# Packages can be installed from any enabled yum repo on the image.
-# RPMfusion repos are available by default in ublue main images
-# List of rpmfusion packages can be found here:
-# https://mirrors.rpmfusion.org/mirrorlist?path=free/fedora/updates/43/x86_64/repoview/index.html&protocol=https&redirect=1
+# --- 1. /opt vorbereiten ------------------------------------------------------
+# Im bootc-Image ist /opt ein Symlink auf /var/opt. /var wird aber nicht aus dem
+# Image übernommen, und das Mullvad-RPM will nach "/opt/Mullvad VPN" entpacken.
+# Deshalb ersetzen wir den Symlink kurzzeitig durch ein echtes Verzeichnis
+# und merken uns das ursprüngliche Ziel.
+OPT_LINK=""
+if [[ -L /opt ]]; then
+    OPT_LINK="$(readlink /opt)"
+    rm /opt
+    mkdir /opt
+fi
 
-# this installs a package from fedora repos
-dnf5 install -y tmux
+# --- 2. Offizielle Mullvad-Paketquelle hinzufügen und Paket installieren ------
+dnf5 config-manager addrepo --from-repofile=https://repository.mullvad.net/rpm/stable/mullvad.repo
+dnf5 install -y mullvad-vpn
 
-# Use a COPR Example:
-#
-# dnf5 -y copr enable ublue-os/staging
-# dnf5 -y install package
-# Disable COPRs so they don't end up enabled on the final image:
-# dnf5 -y copr disable ublue-os/staging
+# --- 3. Grafische App aus /opt in den unveränderlichen Teil (/usr) verschieben -
+mv "/opt/Mullvad VPN" "/usr/lib/Mullvad VPN"
 
-#### Example for enabling a System Unit File
+# /opt wieder in den Originalzustand versetzen
+if [[ -n "${OPT_LINK}" ]]; then
+    rmdir /opt
+    ln -s "${OPT_LINK}" /opt
+fi
 
-systemctl enable podman.socket
+# Aufrufbar machen (die App-Starter-Datei zeigt gleich auf /usr/bin/mullvad-vpn)
+ln -sf "/usr/lib/Mullvad VPN/mullvad-vpn" /usr/bin/mullvad-vpn
+ln -sf "/usr/lib/Mullvad VPN/mullvad-gui" /usr/bin/mullvad-gui
+
+# Electron-Sandbox der grafischen App braucht das setuid-Bit
+chmod 4755 "/usr/lib/Mullvad VPN/chrome-sandbox"
+
+# --- 4. Alte /opt-Pfade in Starter-Datei und Dienst-Units umschreiben ----------
+sed -i 's|"/opt/Mullvad VPN/mullvad-vpn"|/usr/bin/mullvad-vpn|g' \
+    /usr/share/applications/mullvad-vpn.desktop
+for unit in /usr/lib/systemd/system/mullvad-daemon.service \
+            /usr/lib/systemd/system/mullvad-early-boot-blocking.service; do
+    sed -i 's|/opt/Mullvad\\x20VPN/|/usr/lib/Mullvad\\x20VPN/|g' "${unit}"   # systemd-Schreibweise für Leerzeichen
+    sed -i 's|/opt/Mullvad VPN/|/usr/lib/Mullvad VPN/|g' "${unit}"          # normale Schreibweise
+done
+
+# Selbstkontrolle: Bricht den Build ab, falls irgendwo noch ein /opt-Pfad steht
+if grep -q "/opt/Mullvad" /usr/share/applications/mullvad-vpn.desktop \
+        /usr/lib/systemd/system/mullvad-*.service; then
+    echo "FEHLER: Es sind noch /opt-Pfade übrig" >&2
+    exit 1
+fi
+
+# --- 5. Dienste dauerhaft aktivieren ------------------------------------------
+# mullvad-daemon = der eigentliche VPN-Dienst (enthält den Killswitch)
+# mullvad-early-boot-blocking = sperrt das Netz beim Hochfahren, bis der Dienst läuft
+systemctl enable mullvad-daemon.service
+systemctl enable mullvad-early-boot-blocking.service
+
+# --- 6. Paketquelle im fertigen System abschalten ------------------------------
+# Updates kommen über das neu gebaute Image, nicht über dnf auf dem Rechner.
+dnf5 config-manager setopt mullvad-stable.enabled=0
