@@ -1,0 +1,28 @@
+# Konfiguration für das Installations-ISO von bluefin-mullvad.
+# Wird vom Workflow "Build disk images" (.github/workflows/build-disk.yml) verwendet.
+
+# Nach der Installation wird das System auf dein Image in der Registry umgestellt.
+# Damit kommen künftige Updates direkt aus ghcr.io/aguano/bluefin-mullvad
+# und nicht aus der Momentaufnahme, die im ISO steckt.
+[customizations.installer.kickstart]
+contents = """
+%post
+bootc switch --mutate-in-place --transport registry ghcr.io/aguano/bluefin-mullvad:latest
+%end
+"""
+
+# Der Installer fragt nur nach dem Ziellaufwerk. Benutzerkonto, Zeitzone und
+# Netzwerk richtet Bluefin beim ersten Start über seinen Einrichtungsassistenten ein.
+[customizations.installer.modules]
+enable = [
+  "org.fedoraproject.Anaconda.Modules.Storage",
+  "org.fedoraproject.Anaconda.Modules.Runtime"
+]
+disable = [
+  "org.fedoraproject.Anaconda.Modules.Network",
+  "org.fedoraproject.Anaconda.Modules.Security",
+  "org.fedoraproject.Anaconda.Modules.Services",
+  "org.fedoraproject.Anaconda.Modules.Users",
+  "org.fedoraproject.Anaconda.Modules.Subscription",
+  "org.fedoraproject.Anaconda.Modules.Timezone"
+]
