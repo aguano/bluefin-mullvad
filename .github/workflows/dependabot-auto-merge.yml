@@ -1,0 +1,24 @@
+# Markiert Pull Requests von Dependabot für das automatische Zusammenführen.
+# GitHub führt sie erst zusammen, wenn alle Pflichtprüfungen bestanden sind
+# (Regelsatz für main: "Build and push image" muss grün sein).
+# Vorlage: GitHub-Dokumentation "Automating Dependabot with GitHub Actions".
+name: Dependabot auto-merge
+
+on: pull_request
+
+permissions:
+  contents: write        # nötig zum Zusammenführen
+  pull-requests: write   # nötig zum Aktivieren von auto-merge
+
+jobs:
+  dependabot:
+    runs-on: ubuntu-latest
+    # Nur für Pull Requests von Dependabot und nur in diesem Repository
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'aguano/bluefin-mullvad'
+    steps:
+      - name: Enable auto-merge for Dependabot PRs
+        run: gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
