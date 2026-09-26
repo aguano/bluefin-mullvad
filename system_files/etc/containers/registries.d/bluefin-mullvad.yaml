@@ -1,7 +1,7 @@
-   # Signaturen für das eigene Image als Anhänge in der Registry suchen
-   # (so legt cosign sie beim Build auf GitHub ab). Ohne diese Datei findet
-   # das System die Signatur nicht und würde das Image bei aktiver Prüfung ablehnen.
-   # Muster übernommen aus /etc/containers/registries.d/ublue-os.yaml der Basis.
-   docker:
-     ghcr.io/aguano/bluefin-mullvad:
-       use-sigstore-attachments: true
+# Signaturen für das eigene Image als Anhänge in der Registry suchen
+# (so legt cosign sie beim Build auf GitHub ab). Ohne diese Datei findet
+# das System die Signatur nicht und würde das Image bei aktiver Prüfung ablehnen.
+# Muster übernommen aus /etc/containers/registries.d/ublue-os.yaml der Basis.
+docker:
+  ghcr.io/aguano/bluefin-mullvad:
+    use-sigstore-attachments: true
