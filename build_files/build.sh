@@ -71,3 +71,50 @@ systemctl enable mullvad-early-boot-blocking.service
 # --- 6. Paketquelle im fertigen System abschalten ------------------------------
 # Updates kommen über das neu gebaute Image, nicht über dnf auf dem Rechner.
 dnf5 config-manager setopt mullvad-stable.enabled=0
+
+# =============================================================================
+# Signaturprüfung für das eigene Image
+# =============================================================================
+# Trägt in /etc/containers/policy.json eine Regel ein: Images aus
+# ghcr.io/aguano/bluefin-mullvad werden nur mit gültiger cosign-Signatur
+# angenommen, geprüft gegen den öffentlichen Schlüssel aus system_files/.
+# Wirksam wird die Prüfung auf dem Rechner erst nach einmaligem
+#   sudo bootc switch --enforce-container-sigpolicy ghcr.io/aguano/bluefin-mullvad:latest
+# Die Einträge der Basis (ublue-os, toolbx, Red Hat) bleiben erhalten,
+# deshalb wird die Datei per jq ergänzt statt ersetzt.
+
+POLICY="/etc/containers/policy.json"
+SIGN_KEY="/usr/lib/pki/containers/bluefin-mullvad.pub"
+SIGN_REPO="ghcr.io/aguano/bluefin-mullvad"
+
+# --- 7. Vorbedingungen prüfen (Build bricht ab, falls etwas fehlt) -----------
+# Schlüssel und registries.d-Datei müssen aus system_files/ angekommen sein
+grep -q "BEGIN PUBLIC KEY" "${SIGN_KEY}"
+test -s /etc/containers/registries.d/bluefin-mullvad.yaml
+test -s "${POLICY}"
+
+# --- 8. Regel ergänzen ---------------------------------------------------------
+# Setzt nur den Eintrag für das eigene Repository; alles andere bleibt unverändert
+jq --arg repo "${SIGN_REPO}" --arg key "${SIGN_KEY}" \
+   '.transports.docker[$repo] = [{
+       "type": "sigstoreSigned",
+       "keyPath": $key,
+       "signedIdentity": {"type": "matchRepository"}
+    }]' \
+   "${POLICY}" > /tmp/policy.json.new
+# Inhalt zurückschreiben statt die Datei zu ersetzen: Rechte und
+# SELinux-Kennzeichnung der Originaldatei bleiben so erhalten
+cat /tmp/policy.json.new > "${POLICY}"
+rm /tmp/policy.json.new
+
+# --- 9. Selbstkontrolle --------------------------------------------------------
+# jq -e endet mit Fehler, wenn das Ergebnis false oder null ist → Build bricht ab.
+# Eine unlesbare policy.json würde auf dem Rechner jeden Download blockieren,
+# auch den zur Reparatur. Deshalb wird hier streng geprüft.
+# a) Datei ist gültiges JSON, die neue Regel ist vorhanden und korrekt
+jq -e --arg repo "${SIGN_REPO}" --arg key "${SIGN_KEY}" \
+   '.transports.docker[$repo][0].type == "sigstoreSigned"
+    and .transports.docker[$repo][0].keyPath == $key' "${POLICY}"
+# b) Einträge der Basis sind erhalten geblieben
+jq -e '.transports.docker["ghcr.io/ublue-os"] != null' "${POLICY}"
+jq -e '.default[0].type == "reject"' "${POLICY}"
