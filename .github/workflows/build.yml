@@ -5,7 +5,9 @@ on:
     branches:
       - main
   schedule:
-    - cron: '05 10 * * *'  # 10:05am UTC everyday
+    # 10:37 UTC statt 10:05: geplante Läufe zur vollen Stunde und kurz danach
+    # werden bei hoher Last verzögert oder verworfen (am 26.09.2026 ausgefallen)
+    - cron: '37 10 * * *'
   push:
     branches:
       - main
